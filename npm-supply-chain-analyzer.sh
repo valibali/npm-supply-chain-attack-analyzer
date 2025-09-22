@@ -9,7 +9,7 @@
 # - Shai-Hulud worm campaign (Sept 16, 2025) 
 # - Extended package list analysis
 #
-# Author: Security Analysis Tool
+# Author: Balazs Valkony (XC/ENG4-Bp)
 # Date: September 2025
 #############################################################################
 
