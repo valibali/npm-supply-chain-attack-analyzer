@@ -58,13 +58,20 @@ chmod +x npm-attack-analysis.sh
 ./npm-attack-analysis.sh --target /path/to/project --badlist-file custom-badlist.txt
 
 # Download badlist from URL
-./npm-attack-analysis.sh --target /path/to/project --badlist-url https://raw.githubusercontent.com/valibali/npm-supply-chain-attack-analyzer/refs/heads/master/npm-supply-chain-analyzer.sh
+./npm-attack-analysis.sh --target /path/to/project --badlist-url https://raw.githubusercontent.com/valibali/npm-supply-chain-attack-analyzer/refs/heads/master/npm-supply-chain-analyzer.sh](https://raw.githubusercontent.com/valibali/npm-supply-chain-attack-analyzer/refs/heads/master/badlist.txt
 
 # Find VSCode installations (debugging)
 ./npm-attack-analysis.sh --find-vscode
 
 # Show help
 ./npm-attack-analysis.sh --help
+```
+
+### I know what I'm doing
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/valibali/npm-supply-chain-attack-analyzer/refs/heads/master/npm-supply-chain-analyzer.sh" | bash -s -- --target . --badlist-url "https://raw.githubusercontent.com/valibali/npm-supply-chain-attack-analyzer/refs/heads/master/badlist.txt"
+
 ```
 
 ## 📝 Command Line Options
