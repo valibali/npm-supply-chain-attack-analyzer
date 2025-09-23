@@ -58,7 +58,7 @@ chmod +x npm-attack-analysis.sh
 ./npm-attack-analysis.sh --target /path/to/project --badlist-file custom-badlist.txt
 
 # Download badlist from URL
-./npm-attack-analysis.sh --target /path/to/project --badlist-url https://example.com/badlist.txt
+./npm-attack-analysis.sh --target /path/to/project --badlist-url https://raw.githubusercontent.com/valibali/npm-supply-chain-attack-analyzer/refs/heads/master/npm-supply-chain-analyzer.sh
 
 # Find VSCode installations (debugging)
 ./npm-attack-analysis.sh --find-vscode
