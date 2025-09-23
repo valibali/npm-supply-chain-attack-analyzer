@@ -9,7 +9,7 @@
 # - Shai-Hulud worm campaign (Sept 16, 2025) 
 # - Extended package list analysis
 #
-# Author: Balazs Valkony (XC/ENG4-Bp)
+# Author: Balazs Valkony
 # Date: September 2025
 #############################################################################
 
@@ -58,6 +58,10 @@ parse_arguments() {
     
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --target|-t)
+                REPO_PATH="$2"
+                shift 2
+                ;;
             --badlist-file)
                 BADLIST_FILE="$2"
                 shift 2
@@ -79,7 +83,10 @@ parse_arguments() {
                 exit 1
                 ;;
             *)
-                REPO_PATH="$1"
+                # If no --target specified, treat first positional arg as target
+                if [ "$REPO_PATH" = "$DEFAULT_REPO_PATH" ]; then
+                    REPO_PATH="$1"
+                fi
                 shift
                 ;;
         esac
@@ -88,12 +95,24 @@ parse_arguments() {
 
 # Show help message
 show_help() {
-    echo "Usage: $0 [REPO_PATH] [OPTIONS]"
+    echo "Usage: $0 [TARGET_DIR] [OPTIONS]"
+    echo "       $0 --target TARGET_DIR [OPTIONS]"
+    echo ""
+    echo "Arguments:"
+    echo "  TARGET_DIR             Directory to analyze (default: current directory)"
+    echo ""
     echo "Options:"
+    echo "  --target, -t DIR       Target directory to analyze"
     echo "  --badlist-file FILE    Path to badlist file (default: badlist.txt)"
     echo "  --badlist-url URL      URL to download badlist from"
     echo "  --find-vscode          Find and display VSCode installation details"
     echo "  --help, -h             Show this help message"
+    echo ""
+    echo "Analysis behavior:"
+    echo "  - Recursively searches for all node_modules directories"
+    echo "  - Analyzes installed packages in node_modules"
+    echo "  - If no node_modules found, analyzes package.json files"
+    echo "  - Checks VSCode extensions for compromised packages"
     echo ""
     echo "Note: Either --badlist-file or --badlist-url must be provided, or"
     echo "      a 'badlist.txt' file must exist in the current directory."
@@ -103,9 +122,9 @@ show_help() {
     echo "  # Comments start with #"
     echo ""
     echo "Examples:"
-    echo "  chalk:5.6.1"
-    echo "  @crowdstrike/commitlint:8.1.1,8.1.2"
-    echo "  rxnt-authentication:0.0.3,0.0.4,0.0.5,0.0.6"
+    echo "  $0 /path/to/project"
+    echo "  $0 --target /path/to/project --badlist-url https://example.com/badlist.txt"
+    echo "  $0 . --badlist-file custom-badlist.txt"
 }
 
 # Manual VSCode finder for debugging
@@ -203,9 +222,20 @@ initialize_variables() {
 # Initialize
 init_analysis() {
     echo -e "${BLUE}=== NPM Security Analysis Tool ===${NC}"
-    echo -e "Analyzing repository: ${YELLOW}$REPO_PATH${NC}"
+    echo -e "Target directory: ${YELLOW}$REPO_PATH${NC}"
     echo -e "Started at: ${GREEN}$(date)${NC}"
     echo
+    
+    # Validate target directory
+    if [ ! -d "$REPO_PATH" ]; then
+        echo -e "${RED}ERROR: Target directory does not exist: $REPO_PATH${NC}"
+        exit 1
+    fi
+    
+    if [ ! -r "$REPO_PATH" ]; then
+        echo -e "${RED}ERROR: Cannot read target directory: $REPO_PATH${NC}"
+        exit 1
+    fi
     
     # Create output directory
     mkdir -p "$OUTPUT_DIR"
@@ -429,10 +459,8 @@ load_badlist() {
     echo
 }
 
-# Find VSCode extension directories
+# Find VSCode extension directories - returns only paths
 find_vscode_extensions() {
-    echo -e "${BLUE}Finding VSCode extension directories...${NC}"
-    
     local vscode_dirs=()
     local vscode_analysis="$OUTPUT_DIR/vscode_extensions.txt"
     
@@ -441,14 +469,11 @@ find_vscode_extensions() {
     echo "Search performed at: $(date)" >> "$vscode_analysis"
     echo >> "$vscode_analysis"
     
-    # Display header
-    echo -e "${YELLOW}💻 VSCode Extension Detection:${NC}"
-    echo "============================="
-    
     # Expanded VSCode extension paths for better detection
     local vscode_paths=(
         "$HOME/.vscode/extensions"
         "$HOME/.vscode-insiders/extensions"
+        "$HOME/.vscode-server/extensions"
         "$HOME/Library/Application Support/Code/User/extensions"
         "$HOME/.config/Code/User/extensions"
         "$HOME/AppData/Roaming/Code/User/extensions"
@@ -464,14 +489,12 @@ find_vscode_extensions() {
         echo "Checking: $vscode_path" >> "$vscode_analysis"
         
         if [ -d "$vscode_path" ]; then
-            echo -e "${GREEN}✓ Found VSCode extensions: $vscode_path${NC}"
             echo "✓ FOUND: $vscode_path" >> "$vscode_analysis"
             vscode_dirs+=("$vscode_path")
             
             # Count extensions
             local ext_count
             ext_count=$(find "$vscode_path" -maxdepth 1 -type d -name "*.*" 2>/dev/null | wc -l)
-            echo "  📦 Extensions found: $ext_count"
             echo "  Extensions count: $ext_count" >> "$vscode_analysis"
             
             log_message "INFO" "Found VSCode extensions directory: $vscode_path with $ext_count extensions"
@@ -484,6 +507,32 @@ find_vscode_extensions() {
     echo "Summary:" >> "$vscode_analysis"
     echo "Found ${#vscode_dirs[@]} VSCode extension directories" >> "$vscode_analysis"
     
+    # Only return the paths, no display output
+    printf '%s\n' "${vscode_dirs[@]}"
+}
+
+# Display VSCode extension search results
+display_vscode_search() {
+    echo -e "${BLUE}Finding VSCode extension directories...${NC}"
+    
+    local vscode_dirs
+    mapfile -t vscode_dirs < <(find_vscode_extensions)
+    
+    # Display header
+    echo -e "${YELLOW}💻 VSCode Extension Detection:${NC}"
+    echo "============================="
+    
+    if [ ${#vscode_dirs[@]} -gt 0 ]; then
+        for vscode_path in "${vscode_dirs[@]}"; do
+            echo -e "${GREEN}✓ Found VSCode extensions: $vscode_path${NC}"
+            
+            # Count extensions
+            local ext_count
+            ext_count=$(find "$vscode_path" -maxdepth 1 -type d -name "*.*" 2>/dev/null | wc -l)
+            echo "  📦 Extensions found: $ext_count"
+        done
+    fi
+    
     echo "============================="
     echo -e "${GREEN}✅ Found ${#vscode_dirs[@]} VSCode extension directories${NC}"
     
@@ -492,116 +541,534 @@ find_vscode_extensions() {
         echo -e "${BLUE}   Use --find-vscode for detailed detection${NC}"
     fi
     echo
-    
-    printf '%s\n' "${vscode_dirs[@]}"
 }
 
-# Simple analysis functions for the basic version
-analyze_basic() {
-    echo -e "${BLUE}Running basic security analysis...${NC}"
-    echo
+# Analyze VSCode extensions for compromised packages
+analyze_vscode_extensions() {
+    echo -e "${BLUE}Analyzing VSCode extensions...${NC}"
     
-    # Find package files
-    echo -e "${YELLOW}📦 Finding package files...${NC}"
-    local package_count=0
-    local package_files=()
+    local vscode_dirs
+    mapfile -t vscode_dirs < <(find_vscode_extensions)
     
-    while IFS= read -r -d '' file; do
-        package_files+=("$file")
-        ((package_count++))
-        echo "  Found: $file"
-    done < <(find "$REPO_PATH" -name "package.json" -type f -print0 2>/dev/null)
-    
-    echo "✅ Found $package_count package files"
-    echo
-    
-    # Find node_modules
-    echo -e "${YELLOW}📁 Checking node_modules directories...${NC}"
-    local modules_count=0
-    local modules_dirs=()
-    
-    while IFS= read -r -d '' dir; do
-        modules_dirs+=("$dir")
-        ((modules_count++))
-        echo "  Found: $dir"
-    done < <(find "$REPO_PATH" -name "node_modules" -type d -print0 2>/dev/null)
-    
-    echo "✅ Found $modules_count node_modules directories"
-    echo
-    
-    # Check for compromised packages in package.json files
-    echo -e "${YELLOW}🔍 Scanning for compromised packages...${NC}"
-    local findings=0
-    local analysis_file="$OUTPUT_DIR/basic_analysis.txt"
-    
-    echo "Basic Security Analysis Results" > "$analysis_file"
-    echo "==============================" >> "$analysis_file"
-    echo "Analysis Date: $(date)" >> "$analysis_file"
-    echo "Repository: $REPO_PATH" >> "$analysis_file"
-    echo "Packages monitored: ${#COMPROMISED_PACKAGES[@]}" >> "$analysis_file"
-    echo >> "$analysis_file"
-    
-    if [ ${#package_files[@]} -eq 0 ]; then
-        echo "ℹ️  No package.json files found to analyze"
-        echo "No package.json files found" >> "$analysis_file"
-        echo "✅ Package scanning complete"
-        echo
+    if [ ${#vscode_dirs[@]} -eq 0 ]; then
+        echo -e "${YELLOW}ℹ️  No VSCode extension directories found to analyze${NC}"
         return
     fi
     
-    for package_file in "${package_files[@]}"; do
-        echo "  🔍 Scanning: $package_file"
-        echo "File: $package_file" >> "$analysis_file"
+    local vscode_analysis="$OUTPUT_DIR/vscode_analysis.txt"
+    local vscode_findings=0
+    
+    echo "VSCode Extension Security Analysis" > "$vscode_analysis"
+    echo "=================================" >> "$vscode_analysis"
+    echo "Analysis Date: $(date)" >> "$vscode_analysis"
+    echo "Packages monitored: ${#COMPROMISED_PACKAGES[@]}" >> "$vscode_analysis"
+    echo >> "$vscode_analysis"
+    
+    for vscode_dir in "${vscode_dirs[@]}"; do
+        echo -e "${YELLOW}🔍 Analyzing VSCode extensions in: $vscode_dir${NC}"
+        echo "VSCode Directory: $vscode_dir" >> "$vscode_analysis"
         
-        local file_findings=0
-        
-        if [ -f "$package_file" ]; then
-            for package in "${!COMPROMISED_PACKAGES[@]}"; do
-                if grep -q "\"$package\"" "$package_file" 2>/dev/null; then
-                    echo -e "${RED}    ⚠️  Found compromised package: $package${NC}"
-                    echo "      📁 File: $package_file"
-                    echo "      🚨 Compromised versions: ${COMPROMISED_PACKAGES[$package]}"
-                    
-                    # Try to extract version from the file
-                    local found_version
-                    found_version=$(grep -A1 "\"$package\"" "$package_file" | grep -o '"[^"]*"' | tail -1 | tr -d '"' 2>/dev/null || echo "unknown")
-                    echo "      📌 Found version: $found_version"
-                    
-                    echo "  COMPROMISED PACKAGE: $package" >> "$analysis_file"
-                    echo "    Compromised versions: ${COMPROMISED_PACKAGES[$package]}" >> "$analysis_file"
-                    echo "    Found version: $found_version" >> "$analysis_file"
-                    
-                    ((findings++))
-                    ((file_findings++))
-                    log_message "CRITICAL" "Found compromised package $package in $package_file"
-                    echo
-                fi
-            done
+        if [ ! -d "$vscode_dir" ]; then
+            echo "  ⚠️  Directory not accessible"
+            echo "  Directory not accessible" >> "$vscode_analysis"
+            continue
         fi
         
-        if [ $file_findings -eq 0 ]; then
-            echo "    ✅ No compromised packages found"
+        # Find package.json files in VSCode extensions recursively
+        local ext_package_files=()
+        while IFS= read -r -d '' file; do
+            ext_package_files+=("$file")
+        done < <(find "$vscode_dir" -type f -name "package.json" -print0 2>/dev/null)
+        
+        echo "  📦 Found ${#ext_package_files[@]} package.json files in extensions"
+        echo "  Package files found: ${#ext_package_files[@]}" >> "$vscode_analysis"
+        
+        # Analyze each package.json in VSCode extensions
+        for package_file in "${ext_package_files[@]}"; do
+            local ext_name
+            ext_name=$(dirname "$package_file" | xargs basename)
+            echo "    🔍 Checking extension: $ext_name"
+            echo "    Extension: $ext_name ($package_file)" >> "$vscode_analysis"
+            
+            local ext_findings=0
+            
+            if [ -f "$package_file" ]; then
+                for package in "${!COMPROMISED_PACKAGES[@]}"; do
+                    if grep -q "\"$package\"" "$package_file" 2>/dev/null; then
+                        echo -e "${RED}      ⚠️  Found compromised package: $package${NC}"
+                        echo "        📁 Extension: $ext_name"
+                        echo "        📄 File: $package_file"
+                        echo "        🚨 Compromised versions: ${COMPROMISED_PACKAGES[$package]}"
+                        
+                        # Try to extract version from the file
+                        local found_version
+                        found_version=$(grep -A1 "\"$package\"" "$package_file" | grep -o '"[^"]*"' | tail -1 | tr -d '"' 2>/dev/null || echo "unknown")
+                        echo "        📌 Found version: $found_version"
+                        
+                        echo "      COMPROMISED PACKAGE: $package" >> "$vscode_analysis"
+                        echo "        Compromised versions: ${COMPROMISED_PACKAGES[$package]}" >> "$vscode_analysis"
+                        echo "        Found version: $found_version" >> "$vscode_analysis"
+                        
+                        # Record the finding for the report
+                        record_compromised_package "$package" "VSCode extension $ext_name ($package_file)" "$found_version"
+                        
+                        ((vscode_findings++))
+                        ((ext_findings++))
+                        log_message "CRITICAL" "Found compromised package $package in VSCode extension $ext_name ($package_file)"
+                        echo
+                    fi
+                done
+                
+                # Also check node_modules within extensions recursively
+                local ext_node_modules="$(dirname "$package_file")/node_modules"
+                if [ -d "$ext_node_modules" ]; then
+                    echo "      🔍 Checking node_modules in extension recursively..."
+                    local nm_package_files=()
+                    while IFS= read -r -d '' file; do
+                        nm_package_files+=("$file")
+                    done < <(find "$ext_node_modules" -type f -name "package.json" -print0 2>/dev/null)
+                    
+                    for nm_package_file in "${nm_package_files[@]}"; do
+                        local nm_package_name
+                        nm_package_name=$(dirname "$nm_package_file" | xargs basename)
+                        
+                        for package in "${!COMPROMISED_PACKAGES[@]}"; do
+                            if [[ "$nm_package_name" == "$package" ]] || grep -q "\"name\"[[:space:]]*:[[:space:]]*\"$package\"" "$nm_package_file" 2>/dev/null; then
+                                echo -e "${RED}        ⚠️  Found compromised dependency: $package${NC}"
+                                echo "          📁 Extension: $ext_name"
+                                echo "          📄 Dependency file: $nm_package_file"
+                                echo "          🚨 Compromised versions: ${COMPROMISED_PACKAGES[$package]}"
+                                
+                                # Try to extract version
+                                local dep_version
+                                dep_version=$(grep "\"version\"" "$nm_package_file" | grep -o '"[^"]*"' | tail -1 | tr -d '"' 2>/dev/null || echo "unknown")
+                                echo "          📌 Found version: $dep_version"
+                                
+                                echo "        COMPROMISED DEPENDENCY: $package" >> "$vscode_analysis"
+                                echo "          Compromised versions: ${COMPROMISED_PACKAGES[$package]}" >> "$vscode_analysis"
+                                echo "          Found version: $dep_version" >> "$vscode_analysis"
+                                echo "          Dependency file: $nm_package_file" >> "$vscode_analysis"
+                                
+                                # Record the finding for the report
+                                record_compromised_package "$package" "VSCode extension $ext_name dependency ($nm_package_file)" "$dep_version"
+                                
+                                ((vscode_findings++))
+                                ((ext_findings++))
+                                log_message "CRITICAL" "Found compromised dependency $package in VSCode extension $ext_name ($nm_package_file)"
+                                echo
+                            fi
+                        done
+                    done
+                fi
+            fi
+            
+            if [ $ext_findings -eq 0 ]; then
+                echo "      ✅ No compromised packages found in this extension"
+            fi
+            
+            echo >> "$vscode_analysis"
+        done
+        
+        echo >> "$vscode_analysis"
+    done
+    
+    echo "================================"
+    echo "📊 VSCode Analysis Summary:"
+    echo "  📁 VSCode directories scanned: ${#vscode_dirs[@]}"
+    echo "  🚨 Compromised packages found: $vscode_findings"
+    echo "================================"
+    
+    if [ $vscode_findings -gt 0 ]; then
+        echo -e "${RED}⚠️  VSCODE SECURITY ALERT: $vscode_findings compromised packages detected!${NC}"
+        echo -e "${RED}📋 Action required: Review and update VSCode extensions${NC}"
+    else
+        echo -e "${GREEN}✅ No compromised packages found in VSCode extensions${NC}"
+    fi
+    
+    echo "✅ VSCode extension analysis complete"
+    echo
+}
+
+# Analyze directories with package.json files for vulnerable packages
+analyze_package_directories() {
+    echo -e "${BLUE}Analyzing directories with package.json files...${NC}"
+    
+    local package_dirs=()
+    local package_files=()
+    local total_findings=0
+    
+    # Find all package.json files recursively
+    echo -e "${YELLOW}📦 Finding package.json files recursively...${NC}"
+    while IFS= read -r -d '' file; do
+        package_files+=("$file")
+        local dir_path
+        dir_path=$(dirname "$file")
+        # Only add unique directories
+        if [[ ! " ${package_dirs[*]} " =~ " ${dir_path} " ]]; then
+            package_dirs+=("$dir_path")
+        fi
+        echo "  Found: $file"
+    done < <(find "$REPO_PATH" -type f -name "package.json" -print0 2>/dev/null)
+    
+    echo "✅ Found ${#package_files[@]} package.json files in ${#package_dirs[@]} directories"
+    echo
+    
+    if [ ${#package_files[@]} -eq 0 ]; then
+        echo -e "${YELLOW}ℹ️  No package.json files found${NC}"
+        return 0
+    fi
+    
+    local analysis_file="$OUTPUT_DIR/package_analysis.txt"
+    echo "Package Directory Security Analysis Results" > "$analysis_file"
+    echo "===========================================" >> "$analysis_file"
+    echo "Analysis Date: $(date)" >> "$analysis_file"
+    echo "Target Directory: $REPO_PATH" >> "$analysis_file"
+    echo "Package.json files found: ${#package_files[@]}" >> "$analysis_file"
+    echo "Directories analyzed: ${#package_dirs[@]}" >> "$analysis_file"
+    echo "Packages monitored: ${#COMPROMISED_PACKAGES[@]}" >> "$analysis_file"
+    echo >> "$analysis_file"
+    
+    # Analyze each directory with package.json
+    for package_dir in "${package_dirs[@]}"; do
+        echo -e "${YELLOW}🔍 Analyzing directory: $package_dir${NC}"
+        echo "Directory: $package_dir" >> "$analysis_file"
+        
+        local dir_findings=0
+        local package_file="$package_dir/package.json"
+        
+        if [ ! -f "$package_file" ]; then
+            echo "  ⚠️  package.json not found in directory"
+            echo "  package.json not found" >> "$analysis_file"
+            continue
+        fi
+        
+        echo "  📄 Analyzing: $package_file"
+        echo "  Package file: $package_file" >> "$analysis_file"
+        
+        # 1. Check dependencies in package.json
+        echo "    🔍 Checking dependencies in package.json..."
+        for package in "${!COMPROMISED_PACKAGES[@]}"; do
+            if grep -q "\"$package\"" "$package_file" 2>/dev/null; then
+                # Extract version from dependencies
+                local declared_version
+                declared_version=$(grep -A1 -B1 "\"$package\"" "$package_file" | grep -o '"[^"]*"' | tail -1 | tr -d '"' 2>/dev/null || echo "unknown")
+                
+                echo -e "${RED}      ⚠️  Found vulnerable dependency: $package${NC}"
+                echo "        📁 Location: $package_file"
+                echo "        📌 Declared version: $declared_version"
+                echo "        🚨 Vulnerable versions: ${COMPROMISED_PACKAGES[$package]}"
+                
+                echo "      VULNERABLE DEPENDENCY: $package" >> "$analysis_file"
+                echo "        Declared version: $declared_version" >> "$analysis_file"
+                echo "        Vulnerable versions: ${COMPROMISED_PACKAGES[$package]}" >> "$analysis_file"
+                
+                # Record the finding
+                record_compromised_package "$package" "$package_file (dependency)" "$declared_version"
+                
+                ((dir_findings++))
+                ((total_findings++))
+                log_message "CRITICAL" "Found vulnerable dependency $package v$declared_version in $package_file"
+                echo
+            fi
+        done
+        
+        # 2. Check installed packages in node_modules (if exists)
+        local node_modules_dir="$package_dir/node_modules"
+        if [ -d "$node_modules_dir" ]; then
+            echo "    🔍 Checking installed packages in node_modules..."
+            echo "    Node modules directory: $node_modules_dir" >> "$analysis_file"
+            
+            # Find all installed packages
+            local installed_packages=()
+            while IFS= read -r -d '' installed_package_file; do
+                installed_packages+=("$installed_package_file")
+            done < <(find "$node_modules_dir" -type f -name "package.json" -print0 2>/dev/null)
+            
+            echo "      📦 Found ${#installed_packages[@]} installed packages"
+            echo "      Installed packages found: ${#installed_packages[@]}" >> "$analysis_file"
+            
+            # Check each installed package
+            for installed_package_file in "${installed_packages[@]}"; do
+                local installed_package_dir
+                installed_package_dir=$(dirname "$installed_package_file")
+                local installed_package_name
+                
+                # Extract package name from package.json
+                installed_package_name=$(grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' "$installed_package_file" 2>/dev/null | sed 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "")
+                
+                # Fallback to directory name if extraction failed
+                if [ -z "$installed_package_name" ]; then
+                    installed_package_name=$(basename "$installed_package_dir")
+                fi
+                
+                # Check if this is a vulnerable package
+                for vulnerable_package in "${!COMPROMISED_PACKAGES[@]}"; do
+                    if [[ "$installed_package_name" == "$vulnerable_package" ]]; then
+                        # Extract installed version
+                        local installed_version
+                        installed_version=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$installed_package_file" 2>/dev/null | sed 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || echo "unknown")
+                        
+                        echo -e "${RED}        ⚠️  Found vulnerable installed package: $installed_package_name${NC}"
+                        echo "          📁 Installation path: $installed_package_dir"
+                        echo "          📌 Installed version: $installed_version"
+                        echo "          🚨 Vulnerable versions: ${COMPROMISED_PACKAGES[$vulnerable_package]}"
+                        echo "          📄 Package file: $installed_package_file"
+                        
+                        echo "        VULNERABLE INSTALLED PACKAGE: $installed_package_name" >> "$analysis_file"
+                        echo "          Installation path: $installed_package_dir" >> "$analysis_file"
+                        echo "          Installed version: $installed_version" >> "$analysis_file"
+                        echo "          Vulnerable versions: ${COMPROMISED_PACKAGES[$vulnerable_package]}" >> "$analysis_file"
+                        echo "          Package file: $installed_package_file" >> "$analysis_file"
+                        
+                        # Record the finding with detailed location info
+                        record_compromised_package "$installed_package_name" "$installed_package_dir (installed: $installed_version)" "$installed_version"
+                        
+                        ((dir_findings++))
+                        ((total_findings++))
+                        log_message "CRITICAL" "Found vulnerable installed package $installed_package_name v$installed_version in $installed_package_dir"
+                        echo
+                        break
+                    fi
+                done
+            done
+        else
+            echo "    ℹ️  No node_modules directory found"
+            echo "    No node_modules directory" >> "$analysis_file"
+        fi
+        
+        # 3. Check package-lock.json or yarn.lock for locked versions
+        local lock_files=("$package_dir/package-lock.json" "$package_dir/yarn.lock")
+        for lock_file in "${lock_files[@]}"; do
+            if [ -f "$lock_file" ]; then
+                echo "    🔍 Checking lock file: $(basename "$lock_file")"
+                echo "    Lock file: $lock_file" >> "$analysis_file"
+                
+                for package in "${!COMPROMISED_PACKAGES[@]}"; do
+                    if grep -q "\"$package\"" "$lock_file" 2>/dev/null; then
+                        # Try to extract version from lock file
+                        local locked_version
+                        if [[ "$lock_file" == *"package-lock.json" ]]; then
+                            locked_version=$(grep -A5 "\"$package\"" "$lock_file" | grep '"version"' | head -1 | grep -o '"[^"]*"' | tail -1 | tr -d '"' 2>/dev/null || echo "unknown")
+                        else
+                            locked_version=$(grep "$package@" "$lock_file" | head -1 | sed 's/.*@\([^:]*\):.*/\1/' 2>/dev/null || echo "unknown")
+                        fi
+                        
+                        echo -e "${RED}        ⚠️  Found vulnerable package in lock file: $package${NC}"
+                        echo "          📁 Lock file: $lock_file"
+                        echo "          📌 Locked version: $locked_version"
+                        echo "          🚨 Vulnerable versions: ${COMPROMISED_PACKAGES[$package]}"
+                        
+                        echo "        VULNERABLE PACKAGE IN LOCK FILE: $package" >> "$analysis_file"
+                        echo "          Lock file: $lock_file" >> "$analysis_file"
+                        echo "          Locked version: $locked_version" >> "$analysis_file"
+                        echo "          Vulnerable versions: ${COMPROMISED_PACKAGES[$package]}" >> "$analysis_file"
+                        
+                        # Record the finding
+                        record_compromised_package "$package" "$lock_file (locked: $locked_version)" "$locked_version"
+                        
+                        ((dir_findings++))
+                        ((total_findings++))
+                        log_message "CRITICAL" "Found vulnerable package $package v$locked_version in $lock_file"
+                        echo
+                    fi
+                done
+            fi
+        done
+        
+        if [ $dir_findings -eq 0 ]; then
+            echo "    ✅ No vulnerable packages found in this directory"
+        else
+            echo "    🚨 Found $dir_findings vulnerable packages in this directory"
         fi
         
         echo >> "$analysis_file"
     done
     
     echo "================================"
-    echo "📊 Scan Summary:"
-    echo "  📦 Package files scanned: $package_count"
-    echo "  🚨 Compromised packages found: $findings"
-    echo "  📁 Node modules directories: $modules_count"
+    echo "📊 Package Directory Analysis Summary:"
+    echo "  📁 Directories analyzed: ${#package_dirs[@]}"
+    echo "  📦 Package.json files scanned: ${#package_files[@]}"
+    echo "  🚨 Vulnerable packages found: $total_findings"
     echo "================================"
     
-    if [ $findings -gt 0 ]; then
-        echo -e "${RED}⚠️  SECURITY ALERT: $findings compromised packages detected!${NC}"
-        echo -e "${RED}📋 Action required: Review and remove compromised packages${NC}"
-    else
-        echo -e "${GREEN}✅ No compromised packages found${NC}"
+    return $total_findings
+}
+
+# Main analysis function that analyzes package directories
+analyze_basic() {
+    echo -e "${BLUE}Running comprehensive security analysis...${NC}"
+    echo -e "${BLUE}Target directory: ${YELLOW}$REPO_PATH${NC}"
+    echo
+    
+    # Check if target directory exists
+    if [ ! -d "$REPO_PATH" ]; then
+        echo -e "${RED}ERROR: Target directory does not exist: $REPO_PATH${NC}"
+        log_message "ERROR" "Target directory does not exist: $REPO_PATH"
+        exit 1
     fi
     
-    echo "✅ Package scanning complete"
+    local total_findings=0
+    
+    # Analyze directories with package.json files
+    analyze_package_directories
+    local package_findings=$?
+    ((total_findings += package_findings))
+    
     echo
+    echo "================================"
+    echo "📊 Overall Analysis Summary:"
+    echo "  🎯 Target directory: $REPO_PATH"
+    echo "  🚨 Total vulnerable packages found: $total_findings"
+    echo "================================"
+    
+    if [ $total_findings -gt 0 ]; then
+        echo -e "${RED}⚠️  SECURITY ALERT: $total_findings vulnerable packages detected!${NC}"
+        echo -e "${RED}📋 Action required: Review and remediate vulnerable packages${NC}"
+    else
+        echo -e "${GREEN}✅ No vulnerable packages found${NC}"
+    fi
+    
+    echo "✅ Analysis complete"
+    echo
+}
+
+# Global variables for runtime collection
+declare -g -A FOUND_COMPROMISED_PACKAGES
+declare -g -A FOUND_PACKAGE_LOCATIONS
+declare -g TOTAL_FINDINGS=0
+
+# Function to record a compromised package finding
+record_compromised_package() {
+    local package_name="$1"
+    local location="$2"
+    local found_version="$3"
+    
+    # Add to found packages if not already present
+    if [[ ! " ${!FOUND_COMPROMISED_PACKAGES[*]} " =~ " ${package_name} " ]]; then
+        FOUND_COMPROMISED_PACKAGES["$package_name"]="${COMPROMISED_PACKAGES[$package_name]}"
+    fi
+    
+    # Add location to package
+    if [ -z "${FOUND_PACKAGE_LOCATIONS[$package_name]}" ]; then
+        FOUND_PACKAGE_LOCATIONS["$package_name"]="$location"
+    else
+        FOUND_PACKAGE_LOCATIONS["$package_name"]="${FOUND_PACKAGE_LOCATIONS[$package_name]}|$location"
+    fi
+    
+    ((TOTAL_FINDINGS++))
+}
+
+# Generate comprehensive compromised packages report
+generate_compromised_packages_report() {
+    echo -e "${BLUE}Generating compromised packages report...${NC}"
+    
+    local report_file="$OUTPUT_DIR/compromised_packages_report.txt"
+    local csv_report_file="$OUTPUT_DIR/compromised_packages_report.csv"
+    
+    # Get unique packages from runtime collection
+    local unique_packages=()
+    for package in "${!FOUND_COMPROMISED_PACKAGES[@]}"; do
+        unique_packages+=("$package")
+    done
+    
+    # Generate text report
+    cat > "$report_file" << EOF
+COMPROMISED PACKAGES SUMMARY REPORT
+===================================
+
+Analysis Date: $(date)
+Repository: $REPO_PATH
+Total Findings: $TOTAL_FINDINGS
+Unique Compromised Packages: ${#unique_packages[@]}
+
+EOF
+
+    if [ ${#unique_packages[@]} -eq 0 ]; then
+        cat >> "$report_file" << EOF
+🎉 NO COMPROMISED PACKAGES FOUND!
+
+All checked packages are secure.
+Continue regular security monitoring.
+
+EOF
+    else
+        cat >> "$report_file" << EOF
+⚠️  CRITICAL SECURITY ALERT!
+============================
+
+The following compromised packages were identified:
+
+DETAILED LIST:
+=============
+
+EOF
+
+        # Sort packages alphabetically for better readability
+        IFS=$'\n' sorted_packages=($(sort <<<"${unique_packages[*]}"))
+        unset IFS
+        
+        local counter=1
+        for package in "${sorted_packages[@]}"; do
+            echo "${counter}. PACKAGE: $package" >> "$report_file"
+            echo "   Compromised versions: ${FOUND_COMPROMISED_PACKAGES[$package]}" >> "$report_file"
+            echo "   Found in locations:" >> "$report_file"
+            
+            # Split locations by pipe and display each
+            IFS='|' read -ra locations <<< "${FOUND_PACKAGE_LOCATIONS[$package]}"
+            for location in "${locations[@]}"; do
+                echo "     - $location" >> "$report_file"
+            done
+            echo >> "$report_file"
+            ((counter++))
+        done
+        
+        cat >> "$report_file" << EOF
+
+IMMEDIATE ACTIONS REQUIRED:
+==========================
+
+1. 🚨 STOP using the affected packages immediately
+2. 🔍 Review all locations where compromised packages are found
+3. 🗑️  Remove or replace compromised package versions
+4. 🔄 Update to clean, verified versions
+5. 🛡️  Run security scans after cleanup
+6. 📞 Contact security team if available
+
+RISK ASSESSMENT:
+===============
+
+- HIGH RISK: Compromised packages may contain malicious code
+- POTENTIAL IMPACT: Data theft, system compromise, supply chain attack
+- URGENCY: Immediate action required
+
+EOF
+    fi
+    
+    # Generate CSV report for easier processing
+    echo "Package Name,Compromised Versions,Locations,Risk Level" > "$csv_report_file"
+    
+    if [ ${#unique_packages[@]} -gt 0 ]; then
+        for package in "${sorted_packages[@]}"; do
+            local locations_csv
+            locations_csv=$(echo "${FOUND_PACKAGE_LOCATIONS[$package]}" | tr '|' ';')
+            echo "\"$package\",\"${FOUND_COMPROMISED_PACKAGES[$package]}\",\"$locations_csv\",\"HIGH\"" >> "$csv_report_file"
+        done
+    fi
+    
+    echo -e "${GREEN}✅ Compromised packages report generated:${NC}"
+    echo -e "   📄 Text report: $report_file"
+    echo -e "   📊 CSV report: $csv_report_file"
+    
+    # Display summary to console
+    if [ ${#unique_packages[@]} -gt 0 ]; then
+        echo
+        echo -e "${RED}🚨 COMPROMISED PACKAGES SUMMARY:${NC}"
+        echo -e "${RED}================================${NC}"
+        for package in "${sorted_packages[@]}"; do
+            echo -e "${RED}• $package${NC} (${FOUND_COMPROMISED_PACKAGES[$package]})"
+        done
+        echo
+    fi
 }
 
 # Generate simple summary
@@ -652,8 +1119,10 @@ main() {
     init_analysis
     check_dependencies
     load_badlist
-    find_vscode_extensions
+    display_vscode_search
     analyze_basic
+    analyze_vscode_extensions
+    generate_compromised_packages_report
     generate_simple_summary
     
     # Final summary with enhanced display
