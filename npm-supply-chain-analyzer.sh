@@ -937,6 +937,184 @@ declare -g -A FOUND_COMPROMISED_PACKAGES
 declare -g -A FOUND_PACKAGE_LOCATIONS
 declare -g TOTAL_FINDINGS=0
 
+# Check for malicious file hashes
+check_malicious_hashes() {
+    echo -e "${BLUE}Checking for malicious file hashes...${NC}"
+    
+    local hash_analysis="$OUTPUT_DIR/malicious_hash_analysis.txt"
+    local hash_findings=0
+    
+    echo "Malicious Hash Analysis" > "$hash_analysis"
+    echo "======================" >> "$hash_analysis"
+    echo "Analysis Date: $(date)" >> "$hash_analysis"
+    echo "Target Directory: $REPO_PATH" >> "$hash_analysis"
+    echo "Malicious hashes monitored: ${#MALICIOUS_HASHES[@]}" >> "$hash_analysis"
+    echo >> "$hash_analysis"
+    
+    if ! command -v sha256sum >/dev/null 2>&1; then
+        echo -e "${YELLOW}⚠️  sha256sum not available, skipping hash analysis${NC}"
+        echo "sha256sum not available - hash analysis skipped" >> "$hash_analysis"
+        return 0
+    fi
+    
+    echo "🔍 Scanning files for malicious hashes..."
+    echo "Scanning JavaScript and executable files..." >> "$hash_analysis"
+    
+    # Find relevant files to check (JS files, executables, etc.)
+    local files_to_check=()
+    while IFS= read -r -d '' file; do
+        files_to_check+=("$file")
+    done < <(find "$REPO_PATH" \( -name "*.js" -o -name "*.mjs" -o -name "*.ts" -o -name "*.sh" -o -name "*.exe" -o -name "*.bin" \) -type f -print0 2>/dev/null)
+    
+    echo "📁 Found ${#files_to_check[@]} files to check for malicious hashes"
+    echo "Files to check: ${#files_to_check[@]}" >> "$hash_analysis"
+    echo >> "$hash_analysis"
+    
+    # Check each file against malicious hashes
+    for file in "${files_to_check[@]}"; do
+        if [ -f "$file" ] && [ -r "$file" ]; then
+            local file_hash
+            file_hash=$(sha256sum "$file" 2>/dev/null | cut -d' ' -f1)
+            
+            if [ -n "$file_hash" ]; then
+                for malicious_hash in "${MALICIOUS_HASHES[@]}"; do
+                    if [[ "$file_hash" == "$malicious_hash" ]]; then
+                        echo -e "${RED}🚨 MALICIOUS FILE DETECTED!${NC}"
+                        echo -e "${RED}   File: $file${NC}"
+                        echo -e "${RED}   Hash: $file_hash${NC}"
+                        echo -e "${RED}   This file matches a known malicious hash!${NC}"
+                        
+                        echo "MALICIOUS FILE DETECTED: $file" >> "$hash_analysis"
+                        echo "  Hash: $file_hash" >> "$hash_analysis"
+                        echo "  Risk: CRITICAL - Known malicious file" >> "$hash_analysis"
+                        echo >> "$hash_analysis"
+                        
+                        # Record as critical finding
+                        record_compromised_package "MALICIOUS_FILE" "$file (hash: $file_hash)" "CRITICAL"
+                        
+                        ((hash_findings++))
+                        log_message "CRITICAL" "Malicious file detected: $file (hash: $file_hash)"
+                        echo
+                    fi
+                done
+            fi
+        fi
+    done
+    
+    echo "📊 Hash Analysis Summary:"
+    echo "  📁 Files scanned: ${#files_to_check[@]}"
+    echo "  🚨 Malicious files found: $hash_findings"
+    
+    if [ $hash_findings -gt 0 ]; then
+        echo -e "${RED}⚠️  CRITICAL: $hash_findings malicious files detected!${NC}"
+        echo -e "${RED}📋 Action required: Quarantine and remove malicious files immediately${NC}"
+    else
+        echo -e "${GREEN}✅ No malicious file hashes detected${NC}"
+    fi
+    
+    echo "✅ Hash analysis complete"
+    echo
+    
+    return $hash_findings
+}
+
+# Check for suspicious patterns in files
+check_suspicious_patterns() {
+    echo -e "${BLUE}Checking for suspicious patterns...${NC}"
+    
+    local pattern_analysis="$OUTPUT_DIR/suspicious_pattern_analysis.txt"
+    local pattern_findings=0
+    
+    echo "Suspicious Pattern Analysis" > "$pattern_analysis"
+    echo "===========================" >> "$pattern_analysis"
+    echo "Analysis Date: $(date)" >> "$pattern_analysis"
+    echo "Target Directory: $REPO_PATH" >> "$pattern_analysis"
+    echo "Suspicious patterns monitored: ${#SUSPICIOUS_PATTERNS[@]}" >> "$pattern_analysis"
+    echo >> "$pattern_analysis"
+    
+    echo "🔍 Scanning files for suspicious patterns..."
+    echo "Scanning text files for suspicious content..." >> "$pattern_analysis"
+    
+    # Find text files to check
+    local text_files=()
+    while IFS= read -r -d '' file; do
+        text_files+=("$file")
+    done < <(find "$REPO_PATH" \( -name "*.js" -o -name "*.mjs" -o -name "*.ts" -o -name "*.json" -o -name "*.sh" -o -name "*.yml" -o -name "*.yaml" -o -name "*.md" -o -name "*.txt" -o -name "*.config" \) -type f -print0 2>/dev/null)
+    
+    echo "📁 Found ${#text_files[@]} text files to scan"
+    echo "Text files to scan: ${#text_files[@]}" >> "$pattern_analysis"
+    echo >> "$pattern_analysis"
+    
+    # Check each pattern in each file
+    for pattern in "${SUSPICIOUS_PATTERNS[@]}"; do
+        echo "🔍 Searching for pattern: $pattern"
+        echo "Pattern: $pattern" >> "$pattern_analysis"
+        
+        local pattern_matches=0
+        
+        for file in "${text_files[@]}"; do
+            if [ -f "$file" ] && [ -r "$file" ]; then
+                # Use grep to find pattern matches with line numbers
+                local matches
+                matches=$(grep -n "$pattern" "$file" 2>/dev/null || true)
+                
+                if [ -n "$matches" ]; then
+                    echo -e "${RED}  ⚠️  Suspicious pattern found in: $file${NC}"
+                    
+                    # Show first few matches
+                    local line_count=0
+                    while IFS= read -r match_line; do
+                        if [ $line_count -lt 3 ]; then
+                            echo -e "${YELLOW}    Line: $match_line${NC}"
+                        elif [ $line_count -eq 3 ]; then
+                            echo -e "${YELLOW}    ... (additional matches found)${NC}"
+                        fi
+                        ((line_count++))
+                    done <<< "$matches"
+                    
+                    echo "  SUSPICIOUS PATTERN FOUND: $file" >> "$pattern_analysis"
+                    echo "    Pattern: $pattern" >> "$pattern_analysis"
+                    echo "    Matches: $line_count" >> "$pattern_analysis"
+                    echo "    First match: $(echo "$matches" | head -1)" >> "$pattern_analysis"
+                    echo >> "$pattern_analysis"
+                    
+                    # Record as suspicious finding
+                    record_compromised_package "SUSPICIOUS_PATTERN" "$file (pattern: $pattern)" "SUSPICIOUS"
+                    
+                    ((pattern_matches++))
+                    ((pattern_findings++))
+                    log_message "WARNING" "Suspicious pattern '$pattern' found in $file"
+                fi
+            fi
+        done
+        
+        if [ $pattern_matches -eq 0 ]; then
+            echo "  ✅ Pattern not found"
+        else
+            echo -e "${YELLOW}  🚨 Pattern found in $pattern_matches files${NC}"
+        fi
+        
+        echo >> "$pattern_analysis"
+    done
+    
+    echo "📊 Pattern Analysis Summary:"
+    echo "  📁 Files scanned: ${#text_files[@]}"
+    echo "  🔍 Patterns checked: ${#SUSPICIOUS_PATTERNS[@]}"
+    echo "  🚨 Suspicious patterns found: $pattern_findings"
+    
+    if [ $pattern_findings -gt 0 ]; then
+        echo -e "${YELLOW}⚠️  WARNING: $pattern_findings suspicious patterns detected!${NC}"
+        echo -e "${YELLOW}📋 Action recommended: Review files with suspicious patterns${NC}"
+    else
+        echo -e "${GREEN}✅ No suspicious patterns detected${NC}"
+    fi
+    
+    echo "✅ Pattern analysis complete"
+    echo
+    
+    return $pattern_findings
+}
+
 # Function to record a compromised package finding
 record_compromised_package() {
     local package_name="$1"
@@ -1082,16 +1260,32 @@ NPM Security Analysis Summary
 ============================
 Repository: $REPO_PATH
 Analysis Date: $(date)
-Analysis Type: Basic Scan
+Analysis Type: Comprehensive Security Scan
 
 Files Analyzed:
 - Package files: $(find "$REPO_PATH" -name "package.json" 2>/dev/null | wc -l)
 - Node modules directories: $(find "$REPO_PATH" -name "node_modules" -type d 2>/dev/null | wc -l)
-- Packages monitored: ${#COMPROMISED_PACKAGES[@]}
+- JavaScript/executable files: $(find "$REPO_PATH" \( -name "*.js" -o -name "*.mjs" -o -name "*.ts" -o -name "*.sh" -o -name "*.exe" \) -type f 2>/dev/null | wc -l)
+- Text files scanned: $(find "$REPO_PATH" \( -name "*.js" -o -name "*.json" -o -name "*.yml" -o -name "*.md" -o -name "*.txt" \) -type f 2>/dev/null | wc -l)
+
+Security Checks Performed:
+- Compromised packages: ${#COMPROMISED_PACKAGES[@]} monitored
+- Malicious file hashes: ${#MALICIOUS_HASHES[@]} monitored
+- Suspicious patterns: ${#SUSPICIOUS_PATTERNS[@]} monitored
+- VSCode extensions analyzed
+- Package dependencies analyzed
 
 Security Findings:
+- Total findings: $TOTAL_FINDINGS
 - Check analysis.log for detailed results
 - Review any critical findings immediately
+
+Output Files:
+- Main log: analysis.log
+- Compromised packages: compromised_packages_report.txt
+- Hash analysis: malicious_hash_analysis.txt
+- Pattern analysis: suspicious_pattern_analysis.txt
+- VSCode analysis: vscode_analysis.txt
 
 Output Directory: $OUTPUT_DIR
 
@@ -1122,6 +1316,8 @@ main() {
     display_vscode_search
     analyze_basic
     analyze_vscode_extensions
+    check_malicious_hashes
+    check_suspicious_patterns
     generate_compromised_packages_report
     generate_simple_summary
     
